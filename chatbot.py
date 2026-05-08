@@ -1,59 +1,30 @@
-from flask import Flask, render_template, request, jsonify, session
 import json
 import os
 import random
+import streamlit as st
 from huggingface_hub import InferenceClient
 
-app = Flask(__name__)
-app.secret_key = "super_secret_key"  # required for session
+# ---------------- HUGGING FACE CLIENT ----------------
 
 client = InferenceClient(
-    api_key=os.environ["HF_TOKEN"],
+    api_key=st.secrets["HF_TOKEN"]
 )
 
 MODEL_NAME = "meta-llama/Llama-3.1-8B-Instruct:fastest"
 
+# ---------------- LOAD MEDICAL DATA ----------------
+
 base_path = os.path.dirname(__file__)
-json_path = os.path.join(base_path, "medical_data.json")
+
+json_path = os.path.join(
+    base_path,
+    "medical_data.json"
+)
 
 with open(json_path, "r", encoding="utf-8") as file:
     data = json.load(file)
 
-
-@app.route("/")
-def home():
-    return render_template("index.html")
-
-
-@app.route("/chat", methods=["POST"])
-def chat():
-
-    user_message = request.json["message"].lower().strip()
-
-    # Initialize memory
-    if "history" not in session:
-        session["history"] = []
-
-    # Store user message
-    session["history"].append({
-        "role": "user",
-        "content": user_message
-    })
-
-    # Generate response
-    reply = get_response(session["history"])
-
-    # Store assistant response
-    session["history"].append({
-        "role": "assistant",
-        "content": reply
-    })
-
-    # Keep only recent messages
-    session["history"] = session["history"][-6:]
-
-    return jsonify({"reply": reply})
-
+# ---------------- MAIN CHATBOT FUNCTION ----------------
 
 def get_response(history):
 
@@ -62,14 +33,17 @@ def get_response(history):
         [
             h["content"]
             for h in history
-            if isinstance(h, dict) and h.get("role") == "user"
+            if isinstance(h, dict)
+            and h.get("role") == "user"
         ]
     )
 
     msg = recent_text.lower()
+
     matched = []
 
-    # Symptom matching
+    # ---------------- SYMPTOM MATCHING ----------------
+
     for symptom, info in data.items():
 
         for keyword in info.get("keywords", []):
@@ -77,13 +51,17 @@ def get_response(history):
             if keyword.lower() in msg:
 
                 matched.append(info)
+
                 break
 
-    # AI fallback
+    # ---------------- AI FALLBACK ----------------
+
     if not matched:
+
         return get_ai_response(history)
 
-    # Emergency symptoms
+    # ---------------- EMERGENCY DETECTION ----------------
+
     for m in matched:
 
         if m.get("severity") == "high":
@@ -94,27 +72,33 @@ def get_response(history):
                 f"Please seek immediate medical attention."
             )
 
-    # Build response
+    # ---------------- NORMAL RESPONSE ----------------
+
     reply = "Based on your symptoms so far:\n\n"
 
     for m in matched:
 
         reply += f"• {m['description']}\n"
+
         reply += f"Advice: {m['advice']}\n\n"
 
-    # Follow-up questions
+    # ---------------- FOLLOW-UP QUESTIONS ----------------
+
     follow_ups = []
 
     for m in matched:
 
         if "follow_up" in m:
+
             follow_ups.extend(m["follow_up"])
 
     if follow_ups:
+
         reply += "❓ " + random.choice(follow_ups)
 
     return reply.strip()
 
+# ---------------- HUGGING FACE AI RESPONSE ----------------
 
 def get_ai_response(history):
 
@@ -134,11 +118,9 @@ def get_ai_response(history):
                         "If symptoms are serious, advise consulting a doctor."
                     )
                 }
-            ] + history[-6:],
-
+            ] + history[-6:]
         )
 
-        # FIXED LINE
         return completion.choices[0].message.content
 
     except Exception as e:
@@ -149,17 +131,3 @@ def get_ai_response(history):
             "Sorry, I'm having trouble responding right now. "
             "Please try again."
         )
-
-
-@app.route("/reset", methods=["GET"])
-def reset():
-
-    session.clear()
-
-    return jsonify({
-        "message": "Conversation reset"
-    })
-
-
-if __name__ == "__main__":
-    app.run(debug=True)
